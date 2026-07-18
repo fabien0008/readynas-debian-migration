@@ -38,6 +38,18 @@ Plug the **prepared USB stick** into the NAS, then power it on. You should see t
 banner and U-Boot counting down "**Hit any key to stop autoboot**". Press a key to land at the
 `Marvell>>` prompt.
 
+> **Tip — automate the catch.** The countdown is only ~3 seconds, easy to miss by manually reaching for a
+> key at the right moment. **[`scripts/catch-autoboot.py`](../scripts/catch-autoboot.py)** opens the serial
+> port, spams spaces until it sees `Marvell>>`, then stops and streams the console live:
+> ```bash
+> pip install pyserial   # if not already present
+> sudo ./scripts/catch-autoboot.py          # or: sudo ./scripts/catch-autoboot.py /dev/ttyUSB1
+> # -> "Listening on /dev/ttyUSB0. Press the NAS front power button now."
+> ```
+> Power on the NAS after it says "Listening...". Once it prints "Marvell prompt detected, stopped sending
+> spaces", `Ctrl-C` it and reattach with `screen`/`minicom` for interactive use — only one program can hold
+> the serial port at a time.
+
 ## 3. Save the current environment (so you can always get back)
 
 ```

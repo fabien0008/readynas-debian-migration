@@ -11,3 +11,4 @@ secrets.tdb
 *.kdbx
 nand-backup/
 secrets/
+scraped-data/

@@ -36,7 +36,57 @@ though it's an older kernel than the generic release line.
 > Link rot: the original `bodhi`-hosted Dropbox links for these special builds from ~2020–2021 have started
 > to die. Check the current pinned links in the Doozan **"Debian on Netgear RN102"** thread and the
 > **"Linux Kernel MVEBU package and Debian armhf rootfs"** release thread; if a `/s/...` style link is dead,
-> search the thread for a later re-post/mirror before assuming it's gone for good.
+> search the thread for a later re-post/mirror before assuming it's gone for good. As of mid-2026 a current
+> build exists: `linux-7.0.11-mvebu-370xp-tld-1-bodhi.tar.bz2` (kernel 7.0.11) — **confirmed working** on a
+> real RN102 (see below), booting all the way to a full Debian 12 login.
+
+## ⚠️ You still need to install this kernel's own modules — or you'll have no network/RTC
+
+Swapping in the special kernel's `zImage` (as in [03](03-build-usb-rootfs.md)) is enough to get past the
+hang and reach a full login prompt — **storage** (SATA + USB, needed for boot) works immediately because
+those drivers are built directly into the kernel. But the **network driver is a module**
+(`CONFIG_MVNETA=m` in this kernel's own config), and the **RTC driver** typically is too. If your rootfs
+was built for a *different* kernel version (e.g. the generic `Debian-x.y.z-mvebu-tld-1-rootfs-bodhi.tar.bz2`
+rootfs, which ships modules only for its own bundled kernel), there is **no `/lib/modules/<this-kernel's-
+version>/` directory at all** — so `mvneta.ko` has nowhere to load from. Symptoms: you get a full login
+prompt, but `ip link show` lists only `lo`, and `dmesg | grep -i mvneta` is completely silent (the driver
+never even attempted to probe — it simply isn't there).
+
+**Fix — install the special kernel's own `.deb` package into the rootfs**, exactly as bodhi documents
+("install the kernel directly to the rootfs"). Do this with the USB stick mounted on a **Linux host**
+(not live on the NAS — there's no network yet to transfer files to it):
+
+```bash
+# on a Linux box, with the stick's rootfs partition mounted at $T (e.g. /mnt/nas-usb-chroot)
+sudo apt-get install -y qemu-user-static binfmt-support   # lets you run armhf binaries under x86_64 chroot
+sudo cp /usr/bin/qemu-arm-static "$T/usr/bin/"
+sudo mount --bind /dev  "$T/dev"
+sudo mount --bind /proc "$T/proc"
+sudo mount --bind /sys  "$T/sys"
+
+# extract the kernel .deb from the special-kernel tarball, copy it in, then install
+tar xjf linux-7.0.11-mvebu-370xp-tld-1-bodhi.tar.bz2 linux-image-7.0.11-mvebu-370xp-tld-1_1_armhf.deb
+sudo cp linux-image-7.0.11-mvebu-370xp-tld-1_1_armhf.deb "$T/root/"
+sudo chroot "$T" /usr/bin/qemu-arm-static /bin/bash -c \
+     'dpkg -i /root/linux-image-7.0.11-mvebu-370xp-tld-1_1_armhf.deb'
+
+# verify before unmounting
+find "$T/lib/modules/7.0.11-mvebu-370xp-tld-1" -iname 'mvneta.ko*'   # should list mvneta.ko.xz
+
+sudo umount "$T/dev" "$T/proc" "$T/sys"
+sudo umount "$T"
+```
+
+> **Be patient — this is slow.** `dpkg -i` on a ~30 MB kernel package under QEMU user-mode emulation,
+> writing thousands of small module files to a USB stick with mediocre sustained-write speed, can easily
+> take 10–20 minutes. Check it's still making real progress (not stuck) by watching the file count grow:
+> `watch -n5 "find \$T/lib/modules/<version> -type f | wc -l"`. If two `dpkg`/`chroot` invocations
+> accidentally race (e.g. a retried SSH command), the second cleanly fails on the dpkg lock rather than
+> corrupting anything — safe to just let the first one finish.
+
+Re-insert the stick into the NAS and boot again ([04](04-uart-and-uboot.md)/[05](05-first-boot-and-raid.md))
+— this time `ip link show` should show your NIC (possibly renamed `end1` by systemd's predictable network
+naming rather than `eth0` — update `/etc/network/interfaces` accordingly), and `hwclock`/`rtc0` should work.
 
 ## How to tell if you're hitting this
 
@@ -63,4 +113,6 @@ DTB, and retry [04](04-uart-and-uboot.md)/[05](05-first-boot-and-raid.md) from a
 
 *Source: Doozan forum, "Debian on Netgear RN102" thread (bodhi's diagnosis and the confirmed-working
 `370xp-tld-4` boot log), and the "Linux Kernel MVEBU package and Debian armhf rootfs" release thread
-(kernel package index and naming history).*
+(kernel package index and naming history). The module-install fix and its symptoms are from our own
+live reproduction: `linux-7.0.11-mvebu-370xp-tld-1` booted a real RN102 straight to a Debian 12 login over
+serial, confirmed via SSH over a real gigabit link once the kernel's modules were installed.*
