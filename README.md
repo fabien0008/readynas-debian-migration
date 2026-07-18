@@ -74,6 +74,8 @@ model. See [models/compatibility.md](models/compatibility.md) for the full table
 8. **[08 – Rollback & recovery](docs/08-rollback-and-recovery.md)** — get back to stock, or recover data anywhere.
 9. **[09 – RN102/RN104: silent hang after "Starting kernel..."?](docs/09-rn102-rn104-special-kernel.md)** —
    read this if step 5 hangs with no console output; you likely need the special old-U-Boot kernel build.
+10. **[10 – Adopting newer kernels](docs/10-kernel-upgrades.md)** — the repeatable routine to track bodhi's 370xp releases.
+11. **[11 – "invalid root flags" btrfs mount fix](docs/11-btrfs-mount-root-flags-fix.md)** — mount a ReadyNAS-created btrfs volume on a modern kernel.
 
 ---
 
