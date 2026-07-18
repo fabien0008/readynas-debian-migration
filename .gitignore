@@ -1,0 +1,13 @@
+# Never commit device-specific binaries or secrets to this public repo
+*.tar.bz2
+*.tar.gz
+mtd*.bin
+*.dtb
+*_key
+*_key.pub
+authorized_keys
+passdb.tdb
+secrets.tdb
+*.kdbx
+nand-backup/
+secrets/
