@@ -65,3 +65,7 @@ cd / && sudo umount /mnt/usb
 ```
 
 The stick is ready. Next: **[04 — UART & U-Boot](04-uart-and-uboot.md)**.
+
+> ⚠️ **RN102 / RN104 owners**: if you boot this and get total silence right after `Starting kernel ...`
+> (checksums verify fine, it just goes dark), don't debug DTBs or USB — read
+> **[09 — the special kernel these boards need](09-rn102-rn104-special-kernel.md)** first.

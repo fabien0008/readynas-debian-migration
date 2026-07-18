@@ -72,6 +72,8 @@ model. See [models/compatibility.md](models/compatibility.md) for the full table
 6. **[06 – Services & clients](docs/06-services-and-clients.md)** — NFS/SMB, users/UIDs, keep clients seamless.
 7. **[07 – Optimizations](docs/07-optimizations.md)** — the vendor tunings + the resilience gaps to close.
 8. **[08 – Rollback & recovery](docs/08-rollback-and-recovery.md)** — get back to stock, or recover data anywhere.
+9. **[09 – RN102/RN104: silent hang after "Starting kernel..."?](docs/09-rn102-rn104-special-kernel.md)** —
+   read this if step 5 hangs with no console output; you likely need the special old-U-Boot kernel build.
 
 ---
 
