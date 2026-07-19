@@ -10,7 +10,7 @@ documents the full investigation so you don't repeat a multi-day effort — and 
 > If you found this because your box "won't wake" — stop here for WOL, and instead keep it always-on
 > with disks spun down (see [07 — Optimizations → Disk spindown](07-optimizations.md)). If it
 > **reboots itself every ~4 minutes**, that's the *watchdog*, not WOL — see
-> [07 → Hardware watchdog](07-optimizations.md#hardware-watchdog--feed-it-or-the-box-reboots-every-4-minutes).
+> [07 → Hardware watchdog](07-optimizations.md#hardware-watchdog-feed-it-or-the-box-reboots-every-4-minutes).
 
 ## The hardware facts
 

@@ -133,7 +133,7 @@ Give at-a-glance status (`/sys/class/leds/<model>:blue:{pwr,sata1,sata2,...}`):
 `rtc-isl12057` keeps time across reboots/internet outages. Ensure the module is present and
 `systemd-timesyncd` (or chrony) syncs when online; `hwclock --systohc` on shutdown.
 
-### Hardware watchdog — ⚠️ **feed it or the box reboots every ~4 minutes**
+### Hardware watchdog: feed it or the box reboots every 4 minutes
 
 The `orion_wdt` (RN102/RN104) is **started at boot** with a ~229 s timeout and **does not support
 magic-close** — i.e. once running, nothing short of feeding it will stop it. If no userspace process

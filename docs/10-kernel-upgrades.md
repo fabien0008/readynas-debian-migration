@@ -52,11 +52,12 @@ useless for networking until its `/lib/modules/<ver>/` tree exists. `dpkg -i` of
 populates that (and runs `depmod`). Swapping only the `zImage`/`uImage` gets you a login prompt but no
 network — see [09](09-rn102-rn104-special-kernel.md) for the full symptom writeup.
 
-## Building a **custom** kernel (e.g. to patch a driver) — build the drivers `=y`
+## Building a custom kernel: keep drivers built-in
 
-If you rebuild the kernel yourself (cross-compile is easy: `ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-`,
-bodhi ships the `.config` + a `.patch` in the tarball, apply on top of the matching mainline
-`linux-<ver>` from kernel.org), beware the **module-ABI trap**:
+If you rebuild the kernel yourself (e.g. to patch a driver) — cross-compile is easy:
+`ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-`, bodhi ships the `.config` + a `.patch` in the
+tarball, apply on top of the matching mainline `linux-<ver>` from kernel.org — beware the
+**module-ABI trap**:
 
 > Your rebuild's exported-symbol **CRCs won't match bodhi's prebuilt `.ko` files** (any `.config`
 > change, even one flipped by `make olddefconfig`, shifts them). So **none of the stock

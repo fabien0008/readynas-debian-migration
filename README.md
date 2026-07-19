@@ -43,6 +43,10 @@ model. See [models/compatibility.md](models/compatibility.md) for the full table
 
 ## The approach in one picture
 
+This is the **recommended starting point** — USB-boot, stock NAND untouched, fully reversible by
+unplugging the stick. Get here first, prove the box, **then** decide if you want the advanced,
+USB-free variant below.
+
 ```
                  ┌─────────────────────────────────────────────────────────┐
    Netgear NAND  │ u-boot │ u-boot-env │ uImage │ minirootfs │   ubifs      │  ← left UNTOUCHED
@@ -59,6 +63,24 @@ model. See [models/compatibility.md](models/compatibility.md) for the full table
 - The **data array is standard `mdadm` + `btrfs`** — assembled, never re-created. `mdadm --assemble`, not
   `mdadm --create`. No `mkfs`, no factory reset, no repartition of the data disks.
 - A **serial (UART) console** is the only manual step; everything else can be scripted/agent-driven.
+
+### Advanced (optional): going USB-free — NAND *is* rewritten
+
+Once you're confident, you can drop the USB stick entirely: move the rootfs onto the data array
+itself (a `@debian-root` btrfs subvolume, mounted via UUID) and flash the kernel + initrd **into
+NAND** (`mtd2`/`mtd4`). This is real-world proven (see [10 — kernel upgrades → building a custom
+kernel](docs/10-kernel-upgrades.md#building-a-custom-kernel-keep-drivers-built-in)
+and [08 — rollback](docs/08-rollback-and-recovery.md)), but changes the safety picture:
+
+- **NAND is no longer the stock ReadyNAS OS** — the "unplug the stick → stock boots" fallback is
+  gone. Your rollback is the **NAND dumps from step 2** (`flash_erase` + `nandwrite` back to stock)
+  plus a serial console, not a USB unplug.
+- U-Boot's `bootcmd` must be persisted with **`saveenv` at the U-Boot prompt** (not `fw_setenv` from
+  Linux — on real hardware this NAND rejects userspace writes to the env partition; `saveenv` at
+  the U-Boot prompt is the one write path that reliably works).
+- Worth it if you want a self-sufficient box (no dependency on a USB stick's health/port) — not
+  worth it just to save a few seconds of boot time. **Stay on USB-boot unless you have a specific
+  reason not to.**
 
 ---
 
@@ -83,7 +105,7 @@ model. See [models/compatibility.md](models/compatibility.md) for the full table
 > ⚠️ **Two traps this guide now documents up front:** (a) **WOL does not work from power-off on the
 > RN102** — it's a hardware limit, not a config you're missing ([12](docs/12-wake-on-lan-rn102.md)); and
 > (b) on a **non-systemd** rootfs the **`orion_wdt` watchdog will hard-reboot the box every ~4 minutes**
-> unless you run a feeder — see [07 → Hardware watchdog](docs/07-optimizations.md#hardware-watchdog--feed-it-or-the-box-reboots-every-4-minutes).
+> unless you run a feeder — see [07 → Hardware watchdog](docs/07-optimizations.md#hardware-watchdog-feed-it-or-the-box-reboots-every-4-minutes).
 
 ---
 
