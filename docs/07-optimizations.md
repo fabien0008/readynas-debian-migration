@@ -133,26 +133,51 @@ Give at-a-glance status (`/sys/class/leds/<model>:blue:{pwr,sata1,sata2,...}`):
 `rtc-isl12057` keeps time across reboots/internet outages. Ensure the module is present and
 `systemd-timesyncd` (or chrony) syncs when online; `hwclock --systohc` on shutdown.
 
-### Hardware watchdog
+### Hardware watchdog — ⚠️ **feed it or the box reboots every ~4 minutes**
 
-The firmware relied on the SoC watchdog to recover a hung box. Enable it for a headless/remote NAS
-(auto-reboot on hang):
-```ini
-# /etc/systemd/system.conf
-RuntimeWatchdogSec=30
-RebootWatchdogSec=10min
-```
-Confirm `/dev/watchdog` exists (`modprobe orion_wdt` / `armada_37xx_wdt` if it's a module).
+The `orion_wdt` (RN102/RN104) is **started at boot** with a ~229 s timeout and **does not support
+magic-close** — i.e. once running, nothing short of feeding it will stop it. If no userspace process
+pets `/dev/watchdog`, the board **hard-reboots roughly every 229 s, forever.** This presents as a
+box that "reboots itself every few minutes" for no obvious reason — an easy multi-hour trap. Confirm
+with `wdctl` (watch `Timeleft` count down).
 
-### Wake-on-LAN
+- **systemd as PID 1:** it feeds the watchdog for you — just set the timeouts:
+  ```ini
+  # /etc/systemd/system.conf
+  RuntimeWatchdogSec=30
+  RebootWatchdogSec=10min
+  ```
+- **SysVinit / no systemd** (e.g. the bodhi rootfs many of these builds use): **you must run a
+  feeder yourself**, or you get the reboot loop. `busybox` has one built in:
+  ```sh
+  # /etc/init.d/nas-watchdog  (enable EARLY, e.g. rcS S01, so it starts within 229 s of boot)
+  #   start)  [ -e /dev/watchdog ] && /bin/busybox watchdog -t 20 -T 220 /dev/watchdog ;;
+  # -t 20 = pet every 20 s, -T 220 = hardware timeout 220 s. A genuine hang (feeder dead)
+  # still triggers the intended safety reboot after 220 s.
+  ```
+  Verify it survives: `uptime` must climb past ~4 min, and `pgrep -f 'busybox watchdog'` alive.
 
-The Armada `mvneta` NIC supports magic-packet WOL (the stock firmware used it — a live unit reports
-`Supports Wake-on: g` and `Wake-on: g` active). On Debian:
-```bash
-ethtool -s eth0 wol g
-# persist: /etc/systemd/system/wol@eth0.service  -> ExecStart=/sbin/ethtool -s %i wol g ; systemctl enable wol@eth0
-```
-Then `wakeonlan <nas-mac>` wakes it. Test wake **from full off** once (vs suspend) on your board.
+Confirm `/dev/watchdog` exists (`modprobe orion_wdt` if built as a module — but prefer `=y`, see
+[10 — kernel upgrades](10-kernel-upgrades.md)).
+
+### Wake-on-LAN — ⚠️ does **not** work from full power-off on the RN102 (hardware limit)
+
+`ethtool -s eth0 wol g` succeeds and the NIC reports `Supports Wake-on: g` / `Wake-on: g`, so it
+*looks* like the stock firmware. **But a magic packet will not power an RN102 back on from a real
+poweroff.** This was chased to the end (custom kernel carrying Netgear's own PHY-arming code, proven
+firing at the exact right moment) — the board's `gpio-poweroff` removes power from the Ethernet PHY,
+so there is no powered chip left to hear the packet. Netgear's "WOL mode" (≈1 W in their datasheet,
+vs 210 mW true-off) was a *different low-power state* that mainline can't reach. Full write-up and
+proof: **[12 — Wake-on-LAN on the RN102: why it can't work](12-wake-on-lan-rn102.md)**.
+
+Practical guidance:
+- Do **not** rely on WOL to power these boxes on. Keep the NAS **always-on** (idle draw is a few
+  watts with disks spun down — see *Disk spindown* below) — this is usually what people actually
+  want anyway (instant availability + disks asleep).
+- If you need scheduled power-on, the **RTC alarm** works from poweroff (`rtcwake`/`/sys/class/rtc/
+  rtc0/wakealarm`) — time-based, not on-demand.
+- Still set `ethtool -s eth0 wol g` on boot — harmless, and it *may* help on other models in this
+  family whose board wires the PHY INTn differently (unverified; only the RN102 was tested here).
 
 ### Power button
 
@@ -178,10 +203,27 @@ RuntimeMaxUse=32M
 apt-get install -y zram-tools    # /etc/default/zramswap:  PERCENT=150  ALGO=zstd
 ```
 
-**Disk spindown**: ReadyNAS ran `noflushd` to spin idle disks down after ~30 min. `noflushd` is dead on
-modern Debian — use `hd-idle` (`-i 1800`) if you want spindown. But note aggressive spindown can cause
-**media-playback stutter** on first access; with only a couple of low-power disks, leaving them spinning is
-often the better call. It's a power-vs-latency choice, not a clear win.
+**Disk spindown — for "disks spin only for real client I/O"**: since WOL can't power the box off/on
+(above), the way to save the disks is to keep the NAS always-on but let the **data disks sleep** when
+no client is using them. The catch on a **USB-free / root-on-disk** build (see [09](09-rn102-rn104-special-kernel.md)):
+the OS root is on the *same* disks as the data, so any OS write spins them up. Make the OS
+write-silent at idle, then let the drives park themselves:
+
+```bash
+# 1) drive-internal idle timer: park after 20 min of no I/O (persist in rc.local / a boot unit)
+hdparm -S 240 /dev/sda /dev/sdb          # 240 = 20 min; some NAS drives honour -S even without APM
+
+# 2) keep OS writes OFF the disks so they don't get woken:
+#    - /tmp and /var/log -> tmpfs (RAM). For /var/log, restore a dir skeleton at boot AFTER the
+#      tmpfs is mounted (an rcS script ordered after `mountall`), or services lose their log dirs.
+#    - journald Storage=volatile ; noatime on root (already set by the fstab in 05).
+```
+Verify: `hdparm -C /dev/sd?` shows `standby` when idle; `awk '$3~/^sd/{print $8}' /proc/diskstats`
+(write field) stays flat at idle. **Gotchas:** keep `smartd` on `-n standby` (skips sleeping disks);
+don't enable a node_exporter/collectd **SMART/hddtemp** collector (it reads the disk and wakes it);
+and note your *own* `ssh`+`find`/`df` probing resets the idle timer, so test spindown **hands-off**.
+Trade-off: aggressive spindown adds first-access latency (possible media-playback stutter) and
+start/stop cycles — 20 min is a reasonable balance.
 
 ## Apply order
 

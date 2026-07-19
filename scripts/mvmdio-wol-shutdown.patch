@@ -1,0 +1,63 @@
+--- a/drivers/net/ethernet/marvell/mvmdio.c
++++ b/drivers/net/ethernet/marvell/mvmdio.c
+@@ -426,6 +426,52 @@
+ 	}
+ }
+ 
++/*
++ * RN102 Wake-on-LAN: arm the 88E1318S PHY magic-packet wake pin at power-off,
++ * reproducing Netgear ReadyNAS orion_mdio_shutdown(). Registered as the mdio
++ * platform driver .shutdown, so it runs during device_shutdown() AFTER the PHY
++ * child was shut down (device order: children before parents) and while the
++ * mdio clock is still on (clocks are dropped only in .remove) -- the exact spot
++ * the vendor relied on. Routes the magic-packet event to the PHY INTn pin which
++ * is wired to the board power latch, so a magic packet powers the box back on.
++ * Only PHY addr 0 (RN102 single PHY). page-select = reg 0x16.
++ */
++static void orion_mdio_shutdown(struct platform_device *pdev)
++{
++	struct mii_bus *bus = platform_get_drvdata(pdev);
++	int wol, tcr;
++
++	if (!bus || !bus->write || !bus->read)
++		return;
++	if (system_state != SYSTEM_POWER_OFF)
++		return;   /* on reboot, do NOT arm INTn (board would hang, not reset) */
++
++	/* Force soft reset (vendor writes 0x8000 on page 0). */
++	bus->write(bus, 0, 0x16, 0x0);
++	bus->write(bus, 0, 0x00, 0x8000);
++
++	/* WOL armed? page 17 (0x11), reg 0x10, bit 14 (set by ethtool -s eth0 wol g) */
++	bus->write(bus, 0, 0x16, 0x11);
++	wol = bus->read(bus, 0, 0x10);
++	if (wol < 0 || !(wol & BIT(14)))
++		return;
++
++	/* copper interrupt mask: WOL event only (page 0, reg 0x12) */
++	bus->write(bus, 0, 0x16, 0x0);
++	bus->write(bus, 0, 0x12, 0x80);
++	/* WOL control: magic-pkt enable | clear status | 10BT LPM (page 17, reg 0x10) */
++	bus->write(bus, 0, 0x16, 0x11);
++	bus->write(bus, 0, 0x10, 0x5580);
++	/* LED[2]/INTn (page 3, reg 0x12): drive INTn, active-low */
++	bus->write(bus, 0, 0x16, 0x03);
++	tcr = bus->read(bus, 0, 0x12);
++	if (tcr < 0)
++		tcr = 0;
++	bus->write(bus, 0, 0x12, tcr | BIT(11) | BIT(7));
++	bus->write(bus, 0, 0x16, 0x0);
++	pr_emerg("orion-mdio: RN102 PHY WOL wake pin armed\n");
++}
++
+ static const struct of_device_id orion_mdio_match[] = {
+ 	{ .compatible = "marvell,orion-mdio", .data = (void *)BUS_TYPE_SMI },
+ 	{ .compatible = "marvell,xmdio", .data = (void *)BUS_TYPE_XSMI },
+@@ -445,6 +491,7 @@
+ static struct platform_driver orion_mdio_driver = {
+ 	.probe = orion_mdio_probe,
+ 	.remove = orion_mdio_remove,
++	.shutdown = orion_mdio_shutdown,
+ 	.driver = {
+ 		.name = "orion-mdio",
+ 		.of_match_table = orion_mdio_match,

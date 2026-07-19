@@ -5,9 +5,10 @@ mainline **Debian** on the ARM (Armada 370 / Armada XP) ReadyNAS boxes — booti
 stick** while leaving your existing **RAID1/RAID/btrfs data disks and the NAND untouched**.
 
 It also carries over the **vendor tunings** Netgear shipped for this hardware (network/RAID/VM sysctls,
-fan/thermal policy, Wake-on-LAN, LEDs, watchdog) and — most importantly — recreates the **SMART +
+fan/thermal policy, LEDs, watchdog, disk spindown) and — most importantly — recreates the **SMART +
 btrfs-scrub + mdadm monitoring** that ReadyNAS ran *inside its closed daemon* and that a plain Debian
-install does **not** inherit.
+install does **not** inherit. (**Wake-on-LAN is the one vendor feature that does *not* carry over** on
+the RN102 — it's a hardware limit; see [docs/12](docs/12-wake-on-lan-rn102.md).)
 
 > **Why**: ReadyNAS OS 6.10.10 is the final release; ReadyCLOUD and the app UI are gone, the base is an
 > EOL Debian 8 (Jessie) with an ancient 4.x kernel, and Netgear has exited the business. The hardware,
@@ -76,6 +77,13 @@ model. See [models/compatibility.md](models/compatibility.md) for the full table
    read this if step 5 hangs with no console output; you likely need the special old-U-Boot kernel build.
 10. **[10 – Adopting newer kernels](docs/10-kernel-upgrades.md)** — the repeatable routine to track bodhi's 370xp releases.
 11. **[11 – "invalid root flags" btrfs mount fix](docs/11-btrfs-mount-root-flags-fix.md)** — mount a ReadyNAS-created btrfs volume on a modern kernel.
+12. **[12 – Wake-on-LAN on the RN102: why it can't work](docs/12-wake-on-lan-rn102.md)** — the full
+    investigation + verdict (hardware limit). Read before you spend days on WOL.
+
+> ⚠️ **Two traps this guide now documents up front:** (a) **WOL does not work from power-off on the
+> RN102** — it's a hardware limit, not a config you're missing ([12](docs/12-wake-on-lan-rn102.md)); and
+> (b) on a **non-systemd** rootfs the **`orion_wdt` watchdog will hard-reboot the box every ~4 minutes**
+> unless you run a feeder — see [07 → Hardware watchdog](docs/07-optimizations.md#hardware-watchdog--feed-it-or-the-box-reboots-every-4-minutes).
 
 ---
 

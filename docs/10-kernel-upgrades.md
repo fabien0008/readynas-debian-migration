@@ -52,6 +52,37 @@ useless for networking until its `/lib/modules/<ver>/` tree exists. `dpkg -i` of
 populates that (and runs `depmod`). Swapping only the `zImage`/`uImage` gets you a login prompt but no
 network — see [09](09-rn102-rn104-special-kernel.md) for the full symptom writeup.
 
+## Building a **custom** kernel (e.g. to patch a driver) — build the drivers `=y`
+
+If you rebuild the kernel yourself (cross-compile is easy: `ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-`,
+bodhi ships the `.config` + a `.patch` in the tarball, apply on top of the matching mainline
+`linux-<ver>` from kernel.org), beware the **module-ABI trap**:
+
+> Your rebuild's exported-symbol **CRCs won't match bodhi's prebuilt `.ko` files** (any `.config`
+> change, even one flipped by `make olddefconfig`, shifts them). So **none of the stock
+> `/lib/modules/<ver>/*.ko` will load** on your kernel (`Unknown symbol … (err -22)`). If a *boot- or
+> hardware-critical* driver is a **module**, the box breaks in confusing ways:
+> - `btrfs=m` → `mount /dev/md127 … No such device` (root fs type unavailable) → initramfs shell.
+> - `mvneta=m` → boots, but **no `eth0`** → no network.
+> - `i2c_mv64xxx=m` → **no I²C bus → no `g762` fan control** (thermal risk) and no RTC.
+
+**Fix: build every RN102-relevant driver into the kernel (`=y`), not as a module.** It's a fixed
+platform, so there's no downside. At minimum flip these from `=m` to `=y` before building
+(`./scripts/config -e <OPT>` then `make olddefconfig`):
+
+```
+BTRFS_FS  MVNETA  MVNETA_BM  I2C_MV64XXX  I2C_CHARDEV  SENSORS_G762
+RTC_DRV_DS1307   (the isl12057 RTC is driven by rtc-ds1307)   KEYBOARD_GPIO  CHR_DEV_SG
+```
+(RAID1/AHCI/MVMDIO/MARVELL_PHY are usually already `=y`.) The result is a **self-contained** kernel:
+it boots with root + NIC + fan + RTC even against a mismatched/old initrd and `/lib/modules` tree —
+much more robust than the stock `=m` layout. You then don't even need to reinstall modules.
+
+If you flash a custom kernel to **NAND** (`mtd2`) rather than booting from USB, back up the current
+`mtd2` first (`nanddump -f mtd2.bak /dev/mtd2`) and verify the readback md5 after `nandwrite`; recovery
+is a serial/TFTP boot of the backup. (Real-world example: the `mvmdio` WOL patch in
+[12 — Wake-on-LAN](12-wake-on-lan-rn102.md) was built and flashed exactly this way.)
+
 ## Keeping it boot-from-USB (no NAND writes)
 
 None of this touches NAND. The kernel/initrd live on the USB rootfs; U-Boot loads them from USB. Newer
