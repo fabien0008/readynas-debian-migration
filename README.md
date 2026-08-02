@@ -101,11 +101,15 @@ and [08 — rollback](docs/08-rollback-and-recovery.md)), but changes the safety
 11. **[11 – "invalid root flags" btrfs mount fix](docs/11-btrfs-mount-root-flags-fix.md)** — mount a ReadyNAS-created btrfs volume on a modern kernel.
 12. **[12 – Wake-on-LAN on the RN102: why it can't work](docs/12-wake-on-lan-rn102.md)** — the full
     investigation + verdict (hardware limit). Read before you spend days on WOL.
+13. **[13 – The clock runs ~8% slow](docs/13-clock-runs-slow-adjtimex.md)** — ~2 h lost per day, far beyond
+    what NTP can slew. Presents as "my monitoring is empty", not as a clock bug. Fixed with `adjtimex`.
 
-> ⚠️ **Two traps this guide now documents up front:** (a) **WOL does not work from power-off on the
-> RN102** — it's a hardware limit, not a config you're missing ([12](docs/12-wake-on-lan-rn102.md)); and
+> ⚠️ **Three traps this guide now documents up front:** (a) **WOL does not work from power-off on the
+> RN102** — it's a hardware limit, not a config you're missing ([12](docs/12-wake-on-lan-rn102.md));
 > (b) on a **non-systemd** rootfs the **`orion_wdt` watchdog will hard-reboot the box every ~4 minutes**
-> unless you run a feeder — see [07 → Hardware watchdog](docs/07-optimizations.md#hardware-watchdog-feed-it-or-the-box-reboots-every-4-minutes).
+> unless you run a feeder — see [07 → Hardware watchdog](docs/07-optimizations.md#hardware-watchdog-feed-it-or-the-box-reboots-every-4-minutes);
+> and (c) the **system clock runs ~8 % slow**, which NTP cannot correct on its own
+> ([13](docs/13-clock-runs-slow-adjtimex.md)) — you will notice it as broken monitoring, not as a wrong clock.
 
 ---
 

@@ -9,10 +9,46 @@ host keys, NFS exports, SMB shares, and file ownership. Use the capture from
 | Thing | How to keep it |
 | --- | --- |
 | **Hostname** | `hostnamectl set-hostname <old-hostname>`; also `/etc/hosts`. |
-| **IP** | Keep the same static IP / DHCP reservation (reservation keys off the NIC MAC, which is unchanged). |
-| **MAC** | Hardware — unchanged by the OS swap. WOL + DHCP reservations keep working. |
+| **IP** | Keep the same static IP / DHCP reservation. ⚠️ A MAC-keyed reservation is **not** automatically enough — see the DHCP client-id warning below. |
+| **MAC** | Hardware — unchanged by the OS swap, so MAC-keyed reservations *can* keep working. |
 | **SSH host keys** | Copy the old `/etc/ssh/ssh_host_*` into the new `/etc/ssh/` (`chmod 600` the private keys). **This is what stops the "REMOTE HOST IDENTIFICATION HAS CHANGED" warning** on every client. |
 | **authorized_keys** | Restore `/root/.ssh/authorized_keys` (and per-user) so key logins + any automation keep working. |
+
+### ⚠️ Your DHCP reservation can stop matching even though the MAC never changed
+
+A MAC-keyed reservation is the obvious way to pin the box's address, and it looks safe because the NIC MAC
+survives the OS swap. It can still break — and it breaks *later*, after a rootfs rebuild, when you have
+forgotten this was ever a variable.
+
+ISC `dhclient` does not identify itself by MAC alone. By default it sends an **RFC-4361 client-identifier**
+derived from a DUID stored in `/var/lib/dhcp/dhclient.<iface>.leases`. Rebuild or replace the rootfs (a
+kernel experiment, a restore, a fresh install) and that file is regenerated with a **new DUID**, so the
+server sees a *different client* on the same MAC and hands out a pool address instead of your reservation.
+
+The DUID does not even contain your NIC's MAC. Ours advertised
+`ff:8e:35:96:ab:00:01:00:01:24:f6:79:f5:f2:3c:aa:a9:71:ac` — decoding the embedded link-layer address gives
+`f2:3c:aa:a9:71:ac`, unrelated to the real `28:c6:8e:35:96:ab`. Meanwhile the machines whose reservations
+kept working were sending the classic MAC-derived form, `01:<mac>`.
+
+**Fix — pin the client-id to the hardware address**, in `/etc/dhcp/dhclient.conf`:
+
+```
+send dhcp-client-identifier = hardware;
+```
+
+Then `dhclient -r <iface> && dhclient <iface>`. The reservation matches on the first try, and it now
+survives future rootfs rebuilds.
+
+> **Check the right thing:** compare the *client-id* column in the server's lease table, not the MAC. In
+> `dnsmasq.leases` the working hosts show `01:<mac>`; a box that has drifted shows a long `ff:…` DUID.
+
+> **Diagnostic tip.** If the box transmits DHCP DISCOVERs but *never* completes a lease, suspect the
+> **physical link before the DHCP config** — a cable with a damaged RX pair gives a one-way link that looks
+> like a DHCP problem. Confirm by watching for a reply that the box ignores:
+> `tcpdump -i <iface> -n -e 'port 67 or port 68'`. If you see the server broadcast an OFFER carrying the
+> box's own MAC while the box keeps re-DISCOVERing, it cannot hear the reply — replace the cable. (That was
+> our fault, after moving the NAS to a different switch; the "changing IPs" we chased were ARP-scan
+> artifacts, not real leases.)
 
 ## 2. Recreate users with identical UID/GID
 
