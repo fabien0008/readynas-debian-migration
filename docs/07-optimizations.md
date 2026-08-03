@@ -225,6 +225,50 @@ and note your *own* `ssh`+`find`/`df` probing resets the idle timer, so test spi
 Trade-off: aggressive spindown adds first-access latency (possible media-playback stutter) and
 start/stop cycles — 20 min is a reasonable balance.
 
+> ### ⚠️ `/var/log` on tmpfs is not enough — `/var/lib` still writes to your disks
+>
+> We ran the above for weeks believing the disks were parking. **They never were.** Two causes, both
+> easy to miss, and both worth checking before you conclude spindown works:
+>
+> **1. `smartd` writes to `/var/lib/smartmontools/` every ~22–30 min** — state files plus attribute
+> logs. If your rootfs shares spindles with your data (the normal outcome of this migration: root is a
+> btrfs subvol on the RAID), each write spins the array up and **resets the standby timer**. Against a
+> 20-minute timer, the idle window then *never* completes and the disks stay spinning 24/7. Point them
+> at tmpfs instead, in `/etc/default/smartmontools`:
+>
+> ```
+> smartd_opts="--savestates=/var/log/smartmontools/smartd. --attributelog=/var/log/smartmontools/attrlog."
+> ```
+>
+> Create that dir in your `/var/log` boot skeleton too, or it vanishes on the next reboot. Cost: smartd
+> state resets at boot (it only suppresses duplicate alerts); benefit: the OS stops touching the platters.
+>
+> **2. A scheduled `btrfs scrub`** (`/etc/cron.d/btrfs-scrub` on Debian) reads the **entire** volume — for
+> us ~1.93 TiB at ~86 MiB/s, **~6.5 hours** of unavoidable spinning, checkpointing
+> `/var/lib/btrfs/scrub.status.*` throughout. That is data-integrity work, **not a bug** — but it will
+> completely mask any spindown testing. **Always run `btrfs scrub status <mnt>` before concluding
+> anything.**
+>
+> **How to find your own equivalent** (any distro-added writer will do this):
+>
+> ```bash
+> find / -xdev -type f -mmin -30          # what actually changed on the root fs
+> # and per-process block I/O (not page-cache hits):
+> for p in /proc/[0-9]*; do awk '/^write_bytes:/{print $2}' $p/io 2>/dev/null \
+>   | xargs -I{} echo "{} $(tr -d '\0' < $p/cmdline | head -c 50)"; done | sort -rn | head
+> ```
+>
+> **Measurement traps that cost us a lot of time:**
+> - **Sample `diskstats` for longer than the suspected period.** A 120-second sample showed *zero* reads
+>   and writes while a ~22-minute writer was busy keeping the disks awake.
+> - **Do not poll `hdparm -C` to watch for spindown.** The observer perturbs the experiment — and every
+>   `ssh` login reads binaries off the root fs, resetting the timer. Take a **single** reading at the end
+>   of a genuinely hands-off window, or observe out-of-band (we used metrics already pushed to a remote
+>   TSDB).
+> - **Distinguish two different claims.** "Parked stays parked" is easy to demonstrate and proves nothing;
+>   what matters is "**awake becomes parked**". Force the disks awake (`dd iflag=direct`), then leave the
+>   box completely alone for longer than the timer.
+
 ## Apply order
 
 1. Sysctl → re-check `ethtool -k`, throughput.
