@@ -249,6 +249,23 @@ start/stop cycles — 20 min is a reasonable balance.
 > completely mask any spindown testing. **Always run `btrfs scrub status <mnt>` before concluding
 > anything.**
 >
+> **3. Anything polling `smartctl` — and this one is invisible.** After fixing the two writers above,
+> our array reported **literally zero sectors written** (`165982 → 165982` over 22 min) and the disks
+> *still* never parked. The reason: **SMART commands reset the drive's standby countdown but never appear
+> in `/proc/diskstats`**, because they are ATA commands, not block I/O. A monitoring agent reading disk
+> temperature every 60 s against a 1200 s (`-S 240`) timer means the idle window can **never** elapse.
+>
+> The fix is not to stop collecting temperature — it is to poll it **less often than the spindown timer**:
+>
+> ```
+> poll interval (e.g. 1800 s)  >  hdparm -S timer (e.g. 240 × 5 s = 1200 s)
+> ```
+>
+> Then the disk parks first, and the next poll finds it already in standby, where `smartctl -n standby`
+> skips without issuing any command — so it stays parked. If you shorten the spindown timer, shorten the
+> poll interval to match. Note `hdparm -C` is **safe** to poll frequently (we verified it does not reset
+> the timer); it is the SMART reads that do.
+>
 > **How to find your own equivalent** (any distro-added writer will do this):
 >
 > ```bash
@@ -259,6 +276,9 @@ start/stop cycles — 20 min is a reasonable balance.
 > ```
 >
 > **Measurement traps that cost us a lot of time:**
+> - **`diskstats` showing zero I/O does NOT mean the disks are idle.** ATA commands (SMART reads,
+>   `hdparm -C`) never appear there. If the disks stay awake with zero sectors moving, look for a
+>   *command* source, not a *write* source.
 > - **Sample `diskstats` for longer than the suspected period.** A 120-second sample showed *zero* reads
 >   and writes while a ~22-minute writer was busy keeping the disks awake.
 > - **Do not poll `hdparm -C` to watch for spindown.** The observer perturbs the experiment — and every
