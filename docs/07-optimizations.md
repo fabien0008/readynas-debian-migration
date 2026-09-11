@@ -56,6 +56,41 @@ compress only a text-heavy subvolume with `compress=zstd:1`.
 **NFS/SMB**: keep `async` + `RPCNFSDCOUNT=12` + NFSv3, and Samba `use sendfile = yes` /
 `min receivefile size = 16384` — all from the ReadyNAS config, all matter on this CPU (see [06](06-services-and-clients.md)).
 
+### NFS server tuning: raise max_block_size
+
+The kernel NFS server's own block-size cap (`/proc/fs/nfsd/max_block_size`, **64 KB by default**) quietly
+undersells this hardware even after you've already mounted client-side with `rsize=1048576,wsize=1048576`
+— the server won't actually serve blocks that large until its own cap is raised to match. This is a
+**one-line, no-kernel-rebuild** win, measured on a real RN102 (RN102 → LAN client over gigabit, a real
+60 GB file, not a synthetic benchmark):
+
+| | 64 KB cap (default) | 1 MiB cap |
+| --- | --- | --- |
+| Sustained NFS read | 43.6 / 41.0 MB/s | **63–66 MB/s** |
+
+**+46–51%, with no disk-spindown trade-off** — this is independent of the `io_cache_read=2` / NFS
+direct-I/O discussion above and below, which trades a further jump in throughput for more frequent disk
+wakeups and was deliberately left disabled by default. Local (non-network) reads on the same box hit
+106–108 MB/s, so the network path — not disk or btrfs — is the remaining ceiling here.
+
+```bash
+# nfsd refuses the write while any nfsd threads exist ("device or resource busy") — zero them first:
+echo 0 > /proc/fs/nfsd/threads
+echo 1048576 > /proc/fs/nfsd/max_block_size
+service nfs-kernel-server restart      # restart the *service* to respawn workers cleanly — don't just
+                                        # echo a worker count back into /proc/fs/nfsd/threads yourself
+```
+
+To persist this across reboots (e.g. from `/etc/rc.local`), the same zero-the-threads-first gotcha
+applies. ⚠️ **Not yet verified across an actual reboot** — this was added to `rc.local` and confirmed
+working live for 48+ hours of uptime, but the box has not been power-cycled since, so `rc.local`'s
+behavior on a genuine cold boot is still unconfirmed. Check `cat /proc/fs/nfsd/max_block_size` (expect
+`1048576`) the next time this box reboots, before assuming the setting is truly persistent.
+
+A further kernel-side gain (CRC32C prefetch, `CONFIG_DEBUG_PREEMPT=n`, whole-kernel `-O2`) stacks on top
+of this and was built and flashed to NAND as a real-world custom-kernel example — see
+[10 — kernel upgrades → building a custom kernel](10-kernel-upgrades.md#building-a-custom-kernel-keep-drivers-built-in).
+
 ## Storage resilience — the biggest wins (recreate what `readynasd` did)
 
 The stock firmware ran SMART self-tests, periodic btrfs scrubs, and emailed you on a degrading disk —
@@ -288,6 +323,34 @@ start/stop cycles — 20 min is a reasonable balance.
 > - **Distinguish two different claims.** "Parked stays parked" is easy to demonstrate and proves nothing;
 >   what matters is "**awake becomes parked**". Force the disks awake (`dd iflag=direct`), then leave the
 >   box completely alone for longer than the timer.
+
+> ### 4. Confirmed live (2026-09-10): on a root-on-disk build, *any* activity touching `/` resets the timer
+>
+> All three fixes above assume you've found every *writer*. On a root-on-RAID build there's a more basic
+> problem underneath them: **root itself lives on the same physical disks as the data**, so SSH logins,
+> cron reading `/etc`, and even read-only diagnostic commands keep the array awake — not just scheduled
+> writers.
+>
+> Confirmed directly: **53 hours of continuous disk rotation**, zero standby transitions, against a
+> normally-healthy alternating cycle from days earlier. Ruled out one at a time: `smartd` (already pointed
+> at tmpfs per above), the metrics collector (already polling well below the timer per the ratio above),
+> `updatedb`/`plocate` (NFS already excluded from its scan), RAID/btrfs (no scrub/balance/resync running),
+> an hourly sync job (too infrequent on its own to explain continuous spin). A clean 60-second hands-off
+> window showed **zero** I/O on the data disk; the moment *any* command reading `/etc/rc.local`,
+> `/etc/smartd.conf`, `/etc/cron.d/*` (all on `/`, hence on the same spindles as the data on this kind of
+> build) ran, activity resumed immediately.
+>
+> **Not fully isolated to one exact culprit** — most likely an accumulation of several individually
+> legitimate sources (a live diagnostic session, an always-on media client's own periodic NFS polling, an
+> hourly sync job) that all happen to share root's spindles today. The investigation was deliberately
+> **paused rather than pushed to a single root cause**, because the planned fix — moving `/` to its own
+> disk — makes this whole class of finding moot rather than something to patch around. See
+> [14 — SSD root migration](14-ssd-root-migration.md).
+>
+> **Treat "root shares spindles with data" as the structural cause, and this whole section's spindown
+> tuning as deferred pending that migration** — not resolved by the three writers fixed above. Those three
+> fixes are still correct and worth keeping; they just aren't sufficient on their own for a root-on-disk
+> build.
 
 ## Apply order
 

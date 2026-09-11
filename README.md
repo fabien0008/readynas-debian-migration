@@ -103,6 +103,9 @@ and [08 — rollback](docs/08-rollback-and-recovery.md)), but changes the safety
     investigation + verdict (hardware limit). Read before you spend days on WOL.
 13. **[13 – The clock runs ~8% slow](docs/13-clock-runs-slow-adjtimex.md)** — ~2 h lost per day, far beyond
     what NTP can slew. Presents as "my monitoring is empty", not as a clock bug. Fixed with `adjtimex`.
+14. **[14 – SSD root migration (in progress)](docs/14-ssd-root-migration.md)** — moving `/` off the
+    data-array disks entirely, to close the disk-spindown gap a root-on-RAID build can't close on its own.
+    Plan and live findings so far; **not yet executed**.
 
 > ⚠️ **Three traps this guide now documents up front:** (a) **WOL does not work from power-off on the
 > RN102** — it's a hardware limit, not a config you're missing ([12](docs/12-wake-on-lan-rn102.md));

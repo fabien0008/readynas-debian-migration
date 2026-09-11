@@ -50,6 +50,22 @@ survives future rootfs rebuilds.
 > our fault, after moving the NAS to a different switch; the "changing IPs" we chased were ARP-scan
 > artifacts, not real leases.)
 
+### ⚠️ Open item, not yet fixed: a boot-time MAC-forcing script causes a brief network bounce
+
+A script (in our case `/root/set_persistent_mac_address`, invoked from `rc.local`) that forces the NIC to
+the correct hardware MAC after boot is a workaround for U-Boot's own `ethaddr` environment variable
+disagreeing with the real MAC — on one RN102 the U-Boot env held `00:50:43:00:02:02` while the intended
+address was the real `28:c6:8e:35:96:ab`. The workaround does fix the MAC, but because it runs **after**
+the interface is already up, it forces a down/up cycle mid-boot: observed `DHCPRELEASE`, link down, link
+back up, then a fresh `DHCPDISCOVER`/lease a few seconds later (~4–9 s bounce). Harmless once boot
+finishes, but worth knowing about if you're chasing "why did the box flap right after it came up."
+
+**Identified, not fixed.** The clean fix is presumably setting `ethaddr` correctly in the U-Boot
+environment itself (`setenv ethaddr 28:c6:8e:35:96:ab; saveenv`) so the script becomes unnecessary, or
+moving the MAC-forcing earlier, before the interface is brought up — neither has been tried yet. Check
+your own box's U-Boot `ethaddr` against its sticker/label MAC before assuming you need a script like this
+at all.
+
 ## 2. Recreate users with identical UID/GID
 
 File ownership on the btrfs volume is numeric — recreate accounts with the **same** numbers or permissions

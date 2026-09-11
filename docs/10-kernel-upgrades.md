@@ -84,6 +84,28 @@ If you flash a custom kernel to **NAND** (`mtd2`) rather than booting from USB, 
 is a serial/TFTP boot of the backup. (Real-world example: the `mvmdio` WOL patch in
 [12 — Wake-on-LAN](12-wake-on-lan-rn102.md) was built and flashed exactly this way.)
 
+**Second real-world example, and the module-ABI trap avoided this time:** an NFS/CRC-tuned kernel (a
+different `LOCALVERSION` suffix, i.e. a *different* `/lib/modules/<version>-<suffix>/` tree than the one
+already running) was flashed to `mtd2` on a live RN102 purely over SSH, with no serial console available
+as a fallback. This is exactly the scenario the module-ABI trap above describes, and it's what broke this
+same box for **two months** the first time a custom kernel went in that way: the new kernel's own modules
+must be built, installed, and `depmod`-ed **before** the flash, not "once it boots." The order that
+avoided a repeat:
+
+1. Build the new kernel + full module set under its own `LOCALVERSION`.
+2. Install that module tree (`/lib/modules/<new-version>/`) and run `depmod` **while still running the
+   old kernel** — confirm the tree is complete and loadable before touching NAND at all.
+3. Only then `nandwrite` the new `uImage` to `mtd2`.
+4. **Read back and byte-for-byte diff `mtd2` against what was just written — before rebooting**, not just
+   before writing. A bad write is cheap to catch here (old kernel still resident in RAM, SSH session still
+   open); it is not cheap to catch after a reboot with no working fallback path.
+5. Reboot, then verify RAID assembly, mounts, and the target service (in this case NFS) before calling it
+   done.
+
+Result: kernel + NFSD tuning together delivered **+46–51%** sustained NFS throughput, persisted across a
+flash with no console access required — tuning details in
+[07 — Optimizations](07-optimizations.md#nfs-server-tuning-raise-max_block_size).
+
 ## Keeping it boot-from-USB (no NAND writes)
 
 None of this touches NAND. The kernel/initrd live on the USB rootfs; U-Boot loads them from USB. Newer

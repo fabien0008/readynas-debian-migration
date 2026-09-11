@@ -24,6 +24,14 @@ location) differ.
 > packages ship **all** of these DTBs inside `linux-dtb-*.tar` (under `dts/`), so you don't have to hunt
 > for them individually — extract the one for your box.
 
+> **CPU core correction:** these SoCs use Marvell's own **PJ4B** core (ARMv7), not a licensed Cortex-A9 —
+> confirmed straight from U-Boot's own boot banner on a real RN102 (`CPU: Marvell PJ4B v7 UP, 1.2 GHz`,
+> SoC id printed as `MV6710`). Earlier notes (including earlier drafts of this project's own performance
+> work) assumed Cortex-A9; that assumption doesn't change the migration steps, but it matters the moment
+> you cross-compile anything perf-sensitive for this box — use `-mtune=marvell-pj4`, not a Cortex-A9
+> tuning target. It also means PMU cycle counters on this core are not reliable for IPC-style analysis;
+> prefer `perf record -e cpu-clock` over `-e cycles` here.
+
 ## Shared NAND / MTD layout (Armada 370, RN102/RN104)
 
 ```
