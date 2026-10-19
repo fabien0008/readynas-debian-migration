@@ -40,6 +40,22 @@ Netgear 4.4 kernel also draws 0.5 W in that state.
 
 Not tested: the property **without** the hook of step 1. If you try it, report back.
 
+## After a power cut: WOL is gone, the RTC alarm is not
+
+WOL is armed by the kernel at shutdown. After a power cut nothing armed it: when the power comes back
+the box stays off, draws 0.2 W, and ignores magic packets (tested). The RTC (ISL12057, battery-backed)
+keeps its alarm through the cut and can power the board on (tested: alarm set, clean poweroff, AC
+unplugged for ~10 s, the box started on its own at the alarm time). So set the alarm at every halt,
+for example to the next 03:00, from a runlevel-0 script:
+
+```sh
+t=$(date -d "today 03:00" +%s); [ "$t" -le "$(date +%s)" ] && t=$(date -d "tomorrow 03:00" +%s)
+echo 0 > /sys/class/rtc/rtc0/wakealarm; echo "$t" > /sys/class/rtc/rtc0/wakealarm
+```
+
+The cost is one short boot per night when there was no power cut (power the box off again when it is
+idle); the gain is that it comes back on its own after a cut, by 03:00 at the latest.
+
 ## Adding the property to an existing NAND install (no kernel rebuild)
 
 On these boxes the DTB is **appended to the zImage** inside the `uImage` in `mtd2`

@@ -7,6 +7,7 @@
 > `ethernet-phy@0`. Measured at the wall with the box off: 0.2 W and no wake before, 0.5 W and a wake
 > about one second after the magic packet with the fix. Fix, patches and the no-rebuild procedure for
 > an installed NAND kernel: **[docs/12](docs/12-wake-on-lan-rn102.md)**.
+> WOL does not survive a power cut (the box stays off); an RTC alarm set at every halt does, see doc 12.
 > The story: [ReNASsance UPDATE: it wakes up](https://www.fabidouille.com/?p=592).
 
 A practical, **non-destructive** guide to replacing the end-of-life Netgear **ReadyNAS OS 6** with
