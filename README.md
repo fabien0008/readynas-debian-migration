@@ -1,5 +1,13 @@
 # ReadyNAS → Debian migration (ARM Armada 370/XP family)
 
+> **UPDATE 2026-10-19: Wake-on-LAN works on the RN102.** This guide used to say WOL from power-off
+> was a hardware limit. It was not: the mainline Marvell PHY driver sets the 88E1318S LED function
+> register (page 3, reg `0x10`) to `0x0030`, which turns LED[2], the PHY's wake pin, into a link LED.
+> One device-tree line puts back the U-Boot value: `marvell,reg-init = <3 0x10 0 0x083f>;` on
+> `ethernet-phy@0`. Measured at the wall with the box off: 0.2 W and no wake before, 0.5 W and a wake
+> about one second after the magic packet with the fix. Fix, patches and the no-rebuild procedure for
+> an installed NAND kernel: **[docs/12](docs/12-wake-on-lan-rn102.md)**.
+
 A practical, **non-destructive** guide to replacing the end-of-life Netgear **ReadyNAS OS 6** with
 mainline **Debian** on the ARM (Armada 370 / Armada XP) ReadyNAS boxes — booting Debian from a **USB
 stick** while leaving your existing **RAID1/RAID/btrfs data disks and the NAND untouched**.
