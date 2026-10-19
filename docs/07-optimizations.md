@@ -195,24 +195,24 @@ with `wdctl` (watch `Timeleft` count down).
 Confirm `/dev/watchdog` exists (`modprobe orion_wdt` if built as a module — but prefer `=y`, see
 [10 — kernel upgrades](10-kernel-upgrades.md)).
 
-### Wake-on-LAN — ⚠️ does **not** work from full power-off on the RN102 (hardware limit)
+### Wake-on-LAN — works from full power-off (since 2026-10-19), with one device-tree property
 
-`ethtool -s eth0 wol g` succeeds and the NIC reports `Supports Wake-on: g` / `Wake-on: g`, so it
-*looks* like the stock firmware. **But a magic packet will not power an RN102 back on from a real
-poweroff.** This was chased to the end (custom kernel carrying Netgear's own PHY-arming code, proven
-firing at the exact right moment) — the board's `gpio-poweroff` removes power from the Ethernet PHY,
-so there is no powered chip left to hear the packet. Netgear's "WOL mode" (≈1 W in their datasheet,
-vs 210 mW true-off) was a *different low-power state* that mainline can't reach. Full write-up and
-proof: **[12 — Wake-on-LAN on the RN102: why it can't work](12-wake-on-lan-rn102.md)**.
+`ethtool -s eth0 wol g` at boot is not enough on its own: the mainline Marvell PHY driver sets the
+88E1318S LED function register to `0x0030`, which turns LED[2] (the PHY's wake pin, INTn) into a link
+LED, and the box then ignores magic packets (0.2 W when off). Add `marvell,reg-init = <3 0x10 0 0x083f>`
+to `ethernet-phy@0` (the U-Boot value; Netgear's kernel never changes it) and keep the `mvmdio`
+shutdown hook: the box then draws 0.5 W when off and wakes about one second after the packet. Full
+write-up, patches and the no-rebuild procedure for an installed NAND kernel:
+**[12 — Wake-on-LAN on the RN102](12-wake-on-lan-rn102.md)**.
 
 Practical guidance:
-- Do **not** rely on WOL to power these boxes on. Keep the NAS **always-on** (idle draw is a few
-  watts with disks spun down — see *Disk spindown* below) — this is usually what people actually
-  want anyway (instant availability + disks asleep).
-- If you need scheduled power-on, the **RTC alarm** works from poweroff (`rtcwake`/`/sys/class/rtc/
-  rtc0/wakealarm`) — time-based, not on-demand.
-- Still set `ethtool -s eth0 wol g` on boot — harmless, and it *may* help on other models in this
-  family whose board wires the PHY INTn differently (unverified; only the RN102 was tested here).
+- With WOL working, **"off when idle, woken on demand"** beats "always on with disks parked": the disks
+  do not spin at all while the box is off, and the OS-on-the-data-disks problem below disappears with
+  it. Count about 85-100 s from the magic packet to SSH/NFS.
+- Whatever powers the NAS off automatically should look at the NAS's own activity (block I/O on the
+  array, nfsd data bytes, Samba open files, a running scrub), not only at one client.
+- The monthly btrfs scrub needs the box on: wake it shortly before the cron time.
+- The **RTC alarm** (`rtcwake`/`/sys/class/rtc/rtc0/wakealarm`) remains a time-based alternative.
 
 ### Power button
 
@@ -238,9 +238,9 @@ RuntimeMaxUse=32M
 apt-get install -y zram-tools    # /etc/default/zramswap:  PERCENT=150  ALGO=zstd
 ```
 
-**Disk spindown — for "disks spin only for real client I/O"**: since WOL can't power the box off/on
-(above), the way to save the disks is to keep the NAS always-on but let the **data disks sleep** when
-no client is using them. The catch on a **USB-free / root-on-disk** build (see [09](09-rn102-rn104-special-kernel.md)):
+**Disk spindown — for "disks spin only for real client I/O"**: for the hours the NAS is on (with WOL
+working, it can be off the rest of the time, see above), let the **data disks sleep** when no client
+is using them. The catch on a **USB-free / root-on-disk** build (see [09](09-rn102-rn104-special-kernel.md)):
 the OS root is on the *same* disks as the data, so any OS write spins them up. Make the OS
 write-silent at idle, then let the drives park themselves:
 

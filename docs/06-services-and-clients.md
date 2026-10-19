@@ -141,17 +141,15 @@ script that ran `/frontview/bin/autopoweroff` — that binary won't exist on Deb
 `systemctl poweroff` (or `/sbin/poweroff`). Because you preserved the SSH host key and authorized_keys
 (steps 1), the SSH auth itself keeps working unchanged.
 
-## 6. Wake-on-LAN — ⚠️ do not build client automation around this on the RN102
+## 6. Wake-on-LAN — works, once the PHY LED register is fixed
 
-If you relied on WOL (e.g. a home-automation controller powering the NAS on): the MAC is unchanged
-on Debian, so a `wakeonlan <mac>` call from your controller is harmless to send — but on the
-**RN102 it will not power the box back on from a real poweroff.** This was chased to a hardware-level
-proof; see **[12 — Wake-on-LAN on the RN102: why it can't work](12-wake-on-lan-rn102.md)** before
-you build any automation on top of it. Practical alternative: keep the box always-on and spin the
-disks down instead (see [07 — Optimizations → Disk spindown](07-optimizations.md)), or use a smart
-plug / scheduled RTC wake if you need actual remote power-on.
-(If you're on a *different* Armada board in this family and it turns out to work there — the PHY
-standby rail may be wired differently — please report back; see doc 12's closing section.)
+If a home-automation controller powered the NAS on with WOL: the MAC is unchanged on Debian, so its
+`wakeonlan <mac>` keeps working, **provided** the kernel carries the `mvmdio` shutdown hook and the
+device tree carries `marvell,reg-init = <3 0x10 0 0x083f>` on the PHY node — see
+**[12 — Wake-on-LAN on the RN102](12-wake-on-lan-rn102.md)**. Two traps seen while wiring it up:
+- the controller's "power off" path is usually an SSH command: Debian has no `/frontview/bin/...`, use
+  `/sbin/poweroff`; and OpenSSH silently ignores a private key file readable by others (`chmod 600`);
+- give clients enough time: about 85-100 s from the packet to SSH/NFS (a 60 s wait is too short).
 
 ## 7. Verify each client
 

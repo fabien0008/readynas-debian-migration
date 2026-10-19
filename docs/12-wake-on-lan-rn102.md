@@ -1,76 +1,101 @@
-# 12 — Wake-on-LAN on the RN102: why it can't work (and how far we chased it)
+# 12 — Wake-on-LAN on the RN102: it works (one PHY register was the culprit)
 
-**TL;DR:** On a mainline-Debian RN102 you **cannot** wake the box from a real power-off with a WOL
-magic packet. It's a **hardware/board-power limitation**, not a config or driver bug. `gpio-poweroff`
-removes power from the Ethernet PHY, so nothing is left powered to hear the packet. Netgear's stock
-"WOL mode" was a *different low-power state* (≈1 W) that the mainline kernel does not enter. This page
-documents the full investigation so you don't repeat a multi-day effort — and so anyone with a
-**different board in the family (RN104/RN2120)** has the exact mechanism to test.
+**TL;DR:** WOL from a real power-off **works** on a mainline-Debian RN102. An earlier version of this
+page said it was a hardware limit. That was wrong. The cause is one register of the Marvell
+88E1318S PHY: the mainline driver sets its **LED function control** register (page 3, reg `0x10`) to
+`0x0030`, while U-Boot sets `0x083f` and Netgear's kernel never touches it. LED[2] of that PHY is the
+pin that carries the wake signal (INTn). With `0x0030` it becomes a "link" LED, and the board ignores
+magic packets. One device-tree property puts the U-Boot value back:
 
-> If you found this because your box "won't wake" — stop here for WOL, and instead keep it always-on
-> with disks spun down (see [07 — Optimizations → Disk spindown](07-optimizations.md)). If it
-> **reboots itself every ~4 minutes**, that's the *watchdog*, not WOL — see
+```dts
+&mdio {
+	phy0: ethernet-phy@0 { /* Marvell 88E1318 */
+		reg = <0>;
+		marvell,reg-init = <3 0x10 0 0x083f>;
+	};
+};
+```
+
+Measured on a plug meter, box off with WOL armed: **0.2 W** without the property (no wake), **0.5 W**
+with it (wakes about one second after the magic packet; Debian answers ping about 85 s later). The
+Netgear 4.4 kernel also draws 0.5 W in that state.
+
+> If your box **reboots itself every ~4 minutes**, that's the *watchdog*, not WOL — see
 > [07 → Hardware watchdog](07-optimizations.md#hardware-watchdog-feed-it-or-the-box-reboots-every-4-minutes).
 
-## The hardware facts
+## What you need (all three were in place in every successful test)
 
-- SoC: Marvell **Armada 370**. PHY: Marvell **88E1318S** on RGMII. The MAC (`mvneta`) does **not**
-  implement WOL — WOL is a **PHY** function.
-- Mainline runs the PHY as `irq=POLL` (dmesg: `PHY [...mdio-mii:00] driver [Marvell 88E1318S]
-  (irq=POLL)`). **No PHY interrupt line is described in the device tree** — the PHY INTn pin is not
-  wired to a SoC GPIO IRQ. So a magic packet cannot raise a CPU interrupt; the PHY's INTn goes to the
-  **board power circuit** instead (that's the vendor wake path).
-- Netgear datasheet lists **three** power states: ~31 W running, **~1 W "WOL mode"**, **210 mW**
-  power-off. The 1 W state keeps the PHY alive on a standby rail so it can watch for the packet; the
-  210 mW state does not. Mainline's `gpio-poweroff` lands in the **210 mW** state.
-- The mainline and vendor **device trees are functionally identical** for ethernet/PHY/gpio-poweroff.
-  There is no extra "keep the PHY rail alive" node to port.
+1. **The shutdown hook in `mvmdio`** that arms the PHY at power-off, as Netgear's kernel does:
+   [`../scripts/mvmdio-wol-shutdown.patch`](../scripts/mvmdio-wol-shutdown.patch), plus
+   [`../scripts/mvmdio-wol-shutdown-v2.patch`](../scripts/mvmdio-wol-shutdown-v2.patch) on top of it
+   (it resets the PHY first, then programs WOL control `0x5580` and LED[2] as INTn, and reads every
+   register back to the console). Build it in (`CONFIG_MVMDIO=y`).
+2. **The device-tree property above.** As a kernel source patch:
+   [`../scripts/rn102-dts-phy-led-wol.patch`](../scripts/rn102-dts-phy-led-wol.patch). It needs
+   `CONFIG_MARVELL_PHY=y` and `CONFIG_OF_MDIO=y` (both on in the usual 370xp configs).
+   `marvell_config_init()` applies `marvell,reg-init` right after its own LED default, so the
+   register ends at `0x083f`.
+3. **`ethtool -s eth0 wol g` at every boot** (rc.local or an init script). Check with
+   `ethtool eth0 | grep Wake-on` → `Wake-on: g`.
 
-## What the stock firmware actually did (from the GPL sources)
+Not tested: the property **without** the hook of step 1. If you try it, report back.
 
-Netgear's userspace does nothing special — `frontview/bin/autopoweroff` → `rnutil rn_shutdown` →
-plain `/sbin/poweroff`. The magic is one **kernel patch** in
-`drivers/net/ethernet/marvell/mvmdio.c`: a Netgear-added **`orion_mdio_shutdown()`** registered as the
-MDIO platform driver's `.shutdown`. At poweroff, if WOL is armed, it programs the 88E1318S to route
-the magic-packet event to the PHY **INTn pin** (paged registers: page-select = reg `0x16`; WOL ctrl =
-page `0x11` reg `0x10`; LED[2]/INTn = page `3` reg `0x12`). The annotated vendor function is in
-[`../scripts/orion_mdio_shutdown.vendor.c`](../scripts/orion_mdio_shutdown.vendor.c).
+## Adding the property to an existing NAND install (no kernel rebuild)
 
-## What we tried (all failed to wake the box)
+On these boxes the DTB is **appended to the zImage** inside the `uImage` in `mtd2`
+([09](09-rn102-rn104-special-kernel.md), [10](10-kernel-upgrades.md)). So you only rebuild that
+container, with the same zImage:
 
-1. **`ethtool -s eth0 wol g` + shutdown-script ordering** (NETDOWN, ifdown ordering). The PHY WOL
-   registers *do* get armed (verified by reading them back over MDIO: magic-match bit set, correct
-   MAC latched). No wake.
-2. **Suspend-to-RAM (`s2idle`)** instead of poweroff. Here the PHY *stays* powered (its LEDs blink),
-   but nothing wakes s2idle — there is no PHY IRQ line, and even the **power button** can't wake it
-   (the `gpio-keys` node has no `wakeup-source`). ⚠️ This can leave the box needing an AC unplug to
-   recover — don't leave it suspended unattended.
-3. **Userspace replica** of `orion_mdio_shutdown` run as the last thing before `halt`. Fails: the
-   kernel's own `device_shutdown()` runs the PHY driver's shutdown *after* our script and either
-   disables PHY interrupts or `BMCR_PDOWN`s the PHY, wiping the arming. Userspace can't win that race.
-4. **The real fix — a custom kernel** with `orion_mdio_shutdown()` compiled into the built-in `mvmdio`
-   ([`../scripts/mvmdio-wol-shutdown.patch`](../scripts/mvmdio-wol-shutdown.patch)). This runs at the
-   *exact* vendor point (mdio driver `.shutdown`, during `device_shutdown`, mdio clock still live, PHY
-   child already shut down). Serial **confirmed it fired** (`orion-mdio: RN102 PHY WOL wake pin armed`,
-   printed right after `Stopping disk`, after the full register sequence completed). **Still no wake,
-   and every LED dark when off.**
+```bash
+# 0. back up the kernel partition, twice, and keep the copy off the NAS
+dd if=/dev/mtd2 of=mtd2-before.bin bs=128k
+nanddump -f mtd2-before-nanddump.bin /dev/mtd2 && cmp mtd2-before.bin mtd2-before-nanddump.bin
 
-## Conclusion
+# 1. split the current image: uImage header (64 B) + zImage + appended DTB
+#    (zImage length = end field at offset 0x2c of the zImage header; the DTB follows it)
+# 2. add the property to the DTB
+fdtput -t u old.dtb /soc/internal-regs/mdio@72004/ethernet-phy@0 marvell,reg-init 3 16 0 2111
+#    fdtput -t u reads DECIMAL: 16 = 0x10, 2111 = 0x083f. Check:
+fdtget -t x new.dtb /soc/internal-regs/mdio@72004/ethernet-phy@0 marvell,reg-init   # 3 10 0 83f
+# 3. same recipe as the original image
+cat zImage new.dtb > zImage.fdt
+mkimage -A arm -O linux -T kernel -C none -a 0x00008000 -e 0x00008000 -n "<name>" -d zImage.fdt uImage-new
+```
 
-A faithful, in-kernel reproduction of Netgear's exact WOL-arm, executing at exactly the right moment,
-does not wake the RN102 — because `gpio-poweroff` has already removed power from the PHY. The 88E1318S
-magic-packet detector needs the ~1 W standby rail that the mainline poweroff path doesn't provide.
-**On-demand remote power-on is not achievable on the RN102 from mainline Linux.**
+Before flashing, boot that exact image from RAM once (U-Boot `tftpboot 0x2000000 uImage-new`, the
+initrd from NAND as in your `bootcmd`, then `bootm`; no `saveenv`), check that
+`/sys/firmware/devicetree/base/soc/internal-regs/mdio@72004/ethernet-phy@0/marvell,reg-init` exists,
+power off and send a magic packet. Then flash it the way doc [10](10-kernel-upgrades.md) does
+(`flash_erase /dev/mtd2 0 0 && nandwrite -p /dev/mtd2 uImage-new`), read it back with `nanddump` and
+compare **before** rebooting.
 
-Alternatives:
-- **Always-on + disk spindown** (recommended) — [07 → Disk spindown](07-optimizations.md).
-- **Scheduled** power-on via the **RTC alarm** (`rtcwake` / `/sys/class/rtc/rtc0/wakealarm`) — survives
-  poweroff on the RTC's own power. Time-based only, not on-demand.
-- An external **smart plug** to AC-cycle the box if a controller must power it on remotely.
+## How it was found (2026-10-18/19)
+
+The earlier conclusion ("`gpio-poweroff` cuts the PHY's power") came from a hook that ran and a box
+that never woke, with every LED dark. What changed the picture:
+
+- **A control run on the Netgear 4.4 kernel** (booted from RAM over TFTP, no disk access, WOL armed)
+  drew 0.5 W when off and **woke** on the magic packet. Same board, so not a hardware limit.
+- **Every register the two shutdown paths write was compared** (Ghidra/REA on the stock kernel, the
+  decompressed build, and the sources). The PHY end state matched, apart from one interrupt-mask value.
+  Changing that value alone (a one-instruction patch, RAM-only test): still 0.2 W, no wake.
+- **The rest of the PHY driver was then compared.** The stock `m88e1318_set_wol` is upstream 4.4.218
+  unchanged, and the device trees and the `gpio-poweroff` timing are the same. The difference:
+  upstream 4.4 writes `0x0030` to the LED register in `m88e1121_config_aneg()`, and **Netgear removed
+  that write**. Mainline 7.0 writes it again in `marvell_config_led()`. A PHY soft reset does not
+  clear page 3, so the value survives to power-off.
+- **U-Boot leaves `0x083f`** (read at the prompt with `phyWrite 0 16 3; phyRead 0 10`; this U-Boot has
+  `phyRead`/`phyWrite`, not `mii`, numbers in hex). LED[2] = `0x8` = forced off.
+- **Test:** the same kernel with `marvell_config_led()` patched to return at once → 0.5 W, woke, twice.
+  The unchanged kernel with only the DT property → 0.5 W, woke. Then flashed, and verified after a
+  normal Debian `poweroff`.
+
+Why LED[2] in link mode stops the wake is inferred, not measured: there is no schematic here. The
+measured facts are the power draw and the wake.
 
 ## For RN104 / RN2120 hackers
 
-The mechanism above (INTn → board power latch) is the same code Netgear shipped for the whole family.
-If your board keeps a PHY standby rail through `gpio-poweroff` (check: is any RJ45/switch-port LED lit
-when the box is "off"?), the `mvmdio` patch may actually wake it. Build it in (`CONFIG_MVMDIO=y`),
-`ethtool -s eth0 wol g` at boot, and test. Report back — the RN102 specifically does not keep that rail.
+Same PHY family and the same Netgear shutdown code. If WOL does not work on your box, read the LED
+function register at the U-Boot prompt (as above), compare it with the value your kernel leaves
+(`marvell_config_led()` default for the 88E1318S family is `0x0030`), and try `marvell,reg-init` with
+your U-Boot value. Please report back with your board and the values.

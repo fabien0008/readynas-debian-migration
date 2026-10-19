@@ -1,0 +1,127 @@
+# RN102 WOL hook, v2 (reset + WOL arm + register readback). Applies on top of
+# mvmdio-wol-shutdown.patch: replaces the body of orion_mdio_shutdown().
+# Used in every successful WOL test of docs/12 (with the marvell,reg-init DT property).
+--- a/drivers/net/ethernet/marvell/mvmdio.c
++++ b/drivers/net/ethernet/marvell/mvmdio.c
+@@ -1,35 +1,97 @@
+ static void orion_mdio_shutdown(struct platform_device *pdev)
+ {
+ 	struct mii_bus *bus = platform_get_drvdata(pdev);
+-	int wol, tcr;
++	int wol, tcr, ret = 0, bmcr, mask, mac0, mac1, mac2;
++	int want_mac0, want_mac1, want_mac2;
++	bool requested;
+ 
+-	if (!bus || !bus->write || !bus->read)
++	if (!bus || !bus->write || !bus->read ||
++	    system_state != SYSTEM_POWER_OFF)
+ 		return;
+-	if (system_state != SYSTEM_POWER_OFF)
+-		return;   /* on reboot, do NOT arm INTn (board would hang, not reset) */
+ 
+-	/* Force soft reset (vendor writes 0x8000 on page 0). */
+-	bus->write(bus, 0, 0x16, 0x0);
+-	bus->write(bus, 0, 0x00, 0x8000);
++#define RN102_W(reg, val) do { \
++	ret = bus->write(bus, 0, reg, val); \
++	if (ret < 0) { \
++		pr_emerg("orion-mdio: RN102 WOL write reg=%#x failed=%d\n", reg, ret); \
++		goto out; \
++	} \
++} while (0)
+ 
+-	/* WOL armed? page 17 (0x11), reg 0x10, bit 14 (set by ethtool -s eth0 wol g) */
+-	bus->write(bus, 0, 0x16, 0x11);
++	mutex_lock(&bus->mdio_lock);
++	RN102_W(0x16, 0x11);
+ 	wol = bus->read(bus, 0, 0x10);
+-	if (wol < 0 || !(wol & BIT(14)))
+-		return;
++	want_mac2 = bus->read(bus, 0, 0x17);
++	want_mac1 = bus->read(bus, 0, 0x18);
++	want_mac0 = bus->read(bus, 0, 0x19);
++	if (wol < 0 || want_mac0 < 0 || want_mac1 < 0 || want_mac2 < 0) {
++		pr_emerg("orion-mdio: RN102 WOL pre-reset read failed\n");
++		goto out;
++	}
++	requested = wol & BIT(14);
++	pr_emerg("orion-mdio: RN102 WOL before reset ctrl=%#x macwords=%04x/%04x/%04x\n",
++		 wol, want_mac0, want_mac1, want_mac2);
++	RN102_W(0x16, 0);
++	RN102_W(0, 0x8000);
++	/* BMCR reset completion is separate from SMI transaction completion. */
++	ret = read_poll_timeout(bus->read, bmcr,
++				bmcr < 0 || !(bmcr & BIT(15)),
++				1000, 500000, false, bus, 0, 0);
++	if (ret || bmcr < 0) {
++		pr_emerg("orion-mdio: RN102 WOL reset failed ret=%d bmcr=%d\n",
++			 ret, bmcr);
++		goto out;
++	}
++	pr_emerg("orion-mdio: RN102 WOL reset completed bmcr=%#x\n", bmcr);
+ 
+-	/* copper interrupt mask: WOL event only (page 0, reg 0x12) */
+-	bus->write(bus, 0, 0x16, 0x0);
+-	bus->write(bus, 0, 0x12, 0x80);
+-	/* WOL control: magic-pkt enable | clear status | 10BT LPM (page 17, reg 0x10) */
+-	bus->write(bus, 0, 0x16, 0x11);
+-	bus->write(bus, 0, 0x10, 0x5580);
+-	/* LED[2]/INTn (page 3, reg 0x12): drive INTn, active-low */
+-	bus->write(bus, 0, 0x16, 0x03);
++	if (!requested) {
++		pr_emerg("orion-mdio: RN102 WOL was not requested\n");
++		goto out;
++	}
++	RN102_W(0x16, 0);
++	RN102_W(0x12, 0x80);
++	RN102_W(0x16, 0x11);
++	RN102_W(0x17, want_mac2);
++	RN102_W(0x18, want_mac1);
++	RN102_W(0x19, want_mac0);
++	RN102_W(0x10, 0x5580);
++	RN102_W(0x16, 3);
++	tcr = bus->read(bus, 0, 0x12);
++	if (tcr < 0) {
++		pr_emerg("orion-mdio: RN102 WOL TCR read failed=%d\n", tcr);
++		goto out;
++	}
++	/* Match set_wol(): clear FORCE_INT, enable active-low INTn. */
++	RN102_W(0x12, (tcr & ~BIT(15)) | BIT(11) | BIT(7));
+ 	tcr = bus->read(bus, 0, 0x12);
+-	if (tcr < 0)
+-		tcr = 0;
+-	bus->write(bus, 0, 0x12, tcr | BIT(11) | BIT(7));
+-	bus->write(bus, 0, 0x16, 0x0);
+-	pr_emerg("orion-mdio: RN102 PHY WOL wake pin armed\n");
++	RN102_W(0x16, 0x11);
++	wol = bus->read(bus, 0, 0x10);
++	mac2 = bus->read(bus, 0, 0x17);
++	mac1 = bus->read(bus, 0, 0x18);
++	mac0 = bus->read(bus, 0, 0x19);
++	RN102_W(0x16, 0);
++	mask = bus->read(bus, 0, 0x12);
++	bmcr = bus->read(bus, 0, 0);
++	if (tcr < 0 || wol < 0 || mac0 < 0 || mac1 < 0 ||
++	    mac2 < 0 || mask < 0 || bmcr < 0) {
++		pr_emerg("orion-mdio: RN102 WOL readback error tcr=%d ctrl=%d mask=%d bmcr=%d mac=%d/%d/%d\n",
++			 tcr, wol, mask, bmcr, mac0, mac1, mac2);
++		goto out;
++	}
++	pr_emerg("orion-mdio: RN102 WOL readback bmcr=%#x mask=%#x ctrl=%#x tcr=%#x macwords=%04x/%04x/%04x\n",
++		 bmcr, mask, wol, tcr, mac0, mac1, mac2);
++	if ((wol & 0x4580) != 0x4580 || mask != 0x80 ||
++	    (tcr & 0x8880) != 0x0880 || (bmcr & (BIT(15) | BIT(11))) ||
++	    mac0 != want_mac0 || mac1 != want_mac1 || mac2 != want_mac2)
++		pr_emerg("orion-mdio: RN102 WOL readback MISMATCH\n");
++out:
++	ret = bus->write(bus, 0, 0x16, 0);
++	if (ret < 0)
++		pr_emerg("orion-mdio: RN102 WOL page restore failed=%d\n", ret);
++	else {
++		ret = bus->read(bus, 0, 0x16);
++		if (ret < 0)
++			pr_emerg("orion-mdio: RN102 WOL final SMI read failed=%d\n", ret);
++	}
++	mutex_unlock(&bus->mdio_lock);
++#undef RN102_W
+ }

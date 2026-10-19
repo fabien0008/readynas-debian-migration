@@ -1,0 +1,18 @@
+# RN102: keep the U-Boot PHY LED function (0x083f) so the board wakes on a magic packet.
+# See docs/12-wake-on-lan-rn102.md. Against linux v7.0.11.
+--- a/arch/arm/boot/dts/marvell/armada-370-netgear-rn102.dts
++++ b/arch/arm/boot/dts/marvell/armada-370-netgear-rn102.dts
+@@ -180,6 +180,13 @@
+ 	pinctrl-names = "default";
+ 	phy0: ethernet-phy@0 { /* Marvell 88E1318 */
+ 		reg = <0>;
++		/*
++		 * Keep the U-Boot LED function (page 3 reg 0x10 = 0x083f, LED[2]
++		 * forced off). marvell_config_led() writes 0x0030, which puts LED[2]
++		 * (the WOL INTn pin) in link mode; the board then does not wake on a
++		 * magic packet after poweroff. Applied after the LED default.
++		 */
++		marvell,reg-init = <3 0x10 0 0x083f>;
+ 	};
+ };
+ 
